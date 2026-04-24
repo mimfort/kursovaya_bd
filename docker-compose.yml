@@ -1,0 +1,68 @@
+# docker-compose для курсовой «Аптечный склад»
+# Сервисы: db (PostgreSQL) + backend (FastAPI) + frontend (Streamlit).
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pharmacy_db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Локаль для корректной сортировки русского текста
+      LANG: ru_RU.UTF-8
+      LC_ALL: ru_RU.UTF-8
+    ports:
+      # Наружу пробрасываем HOST_POSTGRES_PORT (по умолчанию 5433),
+      # чтобы не конфликтовать с локально установленным PostgreSQL на 5432.
+      # Backend внутри docker-сети обращается по имени `db:5432` как обычно.
+      - "${HOST_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # SQL-файлы из ./db/ будут автоматически применены при первом старте контейнера
+      # (в алфавитном порядке: 01_schema.sql → 02_seed.sql → 03_functions.sql → ...)
+      - ./db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: pharmacy_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db     # обращаемся к соседнему сервису по имени
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: pharmacy_ui
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-8501}:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pg_data:
+    name: pharmacy_pg_data
